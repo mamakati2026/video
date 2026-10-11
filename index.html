@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kamera Adó-Vevő (Canvas Nélkül)</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 {
+            color: #4CAF50;
+            margin-bottom: 20px;
+        }
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            justify-content: center;
+            width: 100%;
+            max-width: 900px;
+        }
+        .panel {
+            background-color: #1e1e1e;
+            border: 2px solid #333;
+            border-radius: 10px;
+            padding: 20px;
+            flex: 1;
+            min-width: 350px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+        h2 {
+            margin-top: 0;
+            color: #bb86fc;
+        }
+        video, .receiver-box {
+            width: 320px;
+            height: 240px;
+            background-color: #000;
+            border: 3px solid #4CAF50;
+            border-radius: 8px;
+            object-fit: cover;
+            margin-bottom: 15px;
+        }
+        .receiver-box {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .receiver-box img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background 0.3s;
+            margin-top: 5px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .status {
+            font-size: 14px;
+            color: #aaa;
+            margin-top: 10px;
+        }
+        .auto-box {
+            margin-top: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Kamera Adó-Vevő (Canvas Nélkül)</h1>
+
+    <div class="container">
+        <!-- KÜLDÉS / ADÓ PANEL -->
+        <div class="panel">
+            <h2>Küldés (Adó)</h2>
+            <video id="webcam" autoplay playsinline muted></video>
+            <button onclick="captureAndSend()">Kép küldése</button>
+            <div class="auto-box">
+                <input type="checkbox" id="autoSend" onchange="toggleAutoSend()">
+                <label for="autoSend">Automatikus küldés (folyamatos)</label>
+            </div>
+            <div id="sendStatus" class="status">Kamera kész.</div>
+        </div>
+
+        <!-- FOGADÁS / VEVŐ PANEL -->
+        <div class="panel">
+            <h2>Fogadás (Vevő)</h2>
+            <div class="receiver-box" id="receiverContainer">
+                <span style="color: #777;">Várakozás adatra...</span>
+            </div>
+            <div id="receiveStatus" class="status">Kapcsolódva a felhőhöz.</div>
+        </div>
+    </div>
+
+    <!-- Firebase SDK betöltése -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+        // Ingyenes teszt Firebase konfiguráció
+        const firebaseConfig = {
+            databaseURL: "https://camera-stream-test-default-rtdb.europe-west1.firebasedatabase.app/"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+        const streamRef = ref(db, 'stream/latestImage');
+
+        const video = document.getElementById('webcam');
+        let autoInterval = null;
+
+        // Kamera indítása
+        navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } })
+            .then(stream => {
+                video.srcObject = stream;
+                document.getElementById('sendStatus').innerText = "Kamera aktív.";
+            })
+            .catch(err => {
+                document.getElementById('sendStatus').innerText = "Kamera hiba: " + err.message;
+                console.error(err);
+            });
+
+        // Kép rögzítése és küldése MediaStream ImageCapture API-val (Canvas nélkül!)
+        window.captureAndSend = async function() {
+            if (!video.srcObject) return;
+            try {
+                const track = video.srcObject.getVideoTracks()[0];
+                const imageCapture = new ImageCapture(track);
+                const blob = await imageCapture.takePhoto();
+                
+                // Blob konvertálása Base64 szöveggé, hogy fel tudjuk tölteni a Realtime Database-be
+                const reader = new FileReader();
+                reader.onloadend = function() {
+                    const base64data = reader.result;
+                    set(streamRef, base64data)
+                        .then(() => {
+                            document.getElementById('sendStatus').innerText = "Kép elküldve: " + new Date().toLocaleTimeString();
+                        })
+                        .catch(error => {
+                            document.getElementById('sendStatus').innerText = "Hiba küldés közben!";
+                            console.error(error);
+                        });
+                }
+                reader.readAsDataURL(blob);
+            } catch (err) {
+                console.error("Hiba a képkészítés során:", err);
+                document.getElementById('sendStatus').innerText = "Képkészítési hiba.";
+            }
+        };
+
+        // Automatikus küldés kapcsoló (kb. másodpercenként 2 kép)
+        window.toggleAutoSend = function() {
+            const isChecked = document.getElementById('autoSend').checked;
+            if (isChecked) {
+                autoInterval = setInterval(captureAndSend, 600);
+            } else {
+                clearInterval(autoInterval);
+            }
+        };
+
+        // Adatok letöltése (fogadás) a felhőből
+        const receiverContainer = document.getElementById('receiverContainer');
+        const receiveStatus = document.getElementById('receiveStatus');
+
+        onValue(streamRef, (snapshot) => {
+            const data = snapshot.val();
+            if (data) {
+                receiverContainer.innerHTML = `<img src="${data}" alt="Beérkezett kép">`;
+                receiveStatus.innerText = "Frissítve: " + new Date().toLocaleTimeString();
+            } else {
+                receiverContainer.innerHTML = `<span style="color: #777;">Nincs elérhető kép.</span>`;
+            }
+        });
+    </script>
+</body>
+</html>
